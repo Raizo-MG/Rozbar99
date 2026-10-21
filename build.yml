@@ -1,0 +1,57 @@
+name: Build APK
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Prepare project
+        run: |
+          mkdir -p www
+          cp index.html www/
+          [ -d fonts ] && cp -r fonts www/ || true
+          [ -f icon.svg ] && cp icon.svg www/ || true
+          npm init -y
+          npm i @capacitor/core @capacitor/cli @capacitor/android @capacitor/local-notifications @capacitor/app @capacitor/status-bar @capacitor/filesystem @capacitor/share
+          cat > capacitor.config.json <<'EOF'
+          {"appId":"ir.roozbar.app","appName":"روزبار","webDir":"www","plugins":{"LocalNotifications":{"smallIcon":"ic_stat_icon","iconColor":"#e8a33d"}}}
+          EOF
+          npx cap add android
+      - name: Android setup
+        run: |
+          M=android/app/src/main/AndroidManifest.xml
+          sed -i 's#<application#<uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>\n    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>\n    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>\n    <application#' $M
+          mkdir -p android/app/src/main/res/drawable
+          cat > android/app/src/main/res/drawable/ic_stat_icon.xml <<'EOF'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24"><path android:fillColor="#FFFFFFFF" android:pathData="M12,22c1.1,0 2,-0.9 2,-2h-4c0,1.1 0.9,2 2,2zM18,16v-5c0,-3.07 -1.63,-5.64 -4.5,-6.32V4c0,-0.83 -0.67,-1.5 -1.5,-1.5s-1.5,0.67 -1.5,1.5v0.68C7.64,5.36 6,7.92 6,11v5l-2,2v1h16v-1l-2,-2z"/></vector>
+          EOF
+      - name: App icon (optional, if icon.png exists)
+        continue-on-error: true
+        run: |
+          if [ -f icon.png ]; then
+            mkdir -p assets
+            cp icon.png assets/icon-only.png
+            cp icon.png assets/icon-foreground.png
+            npm i -D @capacitor/assets
+            npx capacitor-assets generate --android --iconBackgroundColor '#131211'
+          fi
+      - name: Build
+        run: |
+          npx cap sync android
+          cd android && chmod +x gradlew && ./gradlew assembleDebug
+      - name: Publish APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk Roozbar.apk
+          gh release create "apk-${{ github.run_number }}" Roozbar.apk --title "Roozbar ${{ github.run_number }}" --notes "Debug APK"
